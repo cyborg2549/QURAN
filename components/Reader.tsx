@@ -3,17 +3,18 @@ import {
   ArrowLeft, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, 
   Loader2, Bookmark as BookmarkIcon, BookmarkCheck, 
   Settings as SettingsIcon, X, Moon, Sun, Type, Sparkles, Share2, Check,
-  Minus, Plus
+  Minus, Plus, Headphones, ChevronDown
 } from 'lucide-react';
 import { CombinedSurahData, Bookmark, AppSettings, FontSize, ThemeType, CombinedJuzData } from '../types';
 import { getSurahDetails, getJuzDetails } from '../services/quranApi';
+import { getReciterById, getReciterAudioUrl, getReciterFallbackAudioUrl, QURAN_RECITERS } from '../services/reciters';
 import { dbService } from '../services/db';
 import LoadingSpinner from './LoadingSpinner';
 import AIChat from './AIChat';
 import PWAInstallButton from './PWAInstallButton';
+import ReciterSelectorModal from './ReciterSelectorModal';
 
 const BISMILLAH_TEXT = "بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ";
-const BISMILLAH_AUDIO = "https://everyayah.com/data/Alafasy_128kbps/001001.mp3";
 
 interface ReaderProps {
   surahNumber?: number;
@@ -38,11 +39,13 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSettings, setShowSettings] = useState(false);
+  const [showReciterModal, setShowReciterModal] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [isUrduSpeaking, setIsUrduSpeaking] = useState(false);
   const [isTranslationPlaying, setIsTranslationPlaying] = useState(false);
   const [isPashtoPlaying, setIsPashtoPlaying] = useState(false);
   const [isAutoScrolling, setIsAutoScrolling] = useState(true);
+  const activeReciter = getReciterById(settings.reciter);
 
   const [activeWordIndex, setActiveWordIndex] = useState<number>(-1);
   const activeWordIndexRef = useRef<number>(-1);
@@ -332,11 +335,13 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
 
     if (isUrduSpeaking) return;
 
-    // 1. Arabic Recitation Playback (Recited ONCE)
+    // 1. Arabic Recitation Playback (Recited ONCE using selected Reciter)
     if (!isTranslationPlaying && !isPashtoPlaying) {
-      const audioUrl = ayah.audio;
+      const sNum = ayah.surah?.number || surahNumber || 1;
+      const aNum = ayah.numberInSurah;
+      const audioUrl = getReciterAudioUrl(activeReciter.id, sNum, aNum);
       if (audioUrl) {
-        if (!audio.src.includes(audioUrl)) {
+        if (audio.src !== audioUrl) {
           audio.pause();
           audio.src = audioUrl;
           audio.load();
@@ -358,7 +363,9 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
       // Prefetch next audio
       if (data.arabicAyahs[currentAyahIndex + 1] && nextAudioRef.current) {
         const nextAyah = data.arabicAyahs[currentAyahIndex + 1];
-        nextAudioRef.current.src = (settings.audioMode === 'both' ? (nextAyah.urduAudio || nextAyah.audio) : nextAyah.audio) || "";
+        const nextSNum = nextAyah.surah?.number || surahNumber || 1;
+        const nextArabicUrl = getReciterAudioUrl(activeReciter.id, nextSNum, nextAyah.numberInSurah);
+        nextAudioRef.current.src = (settings.audioMode === 'both' ? (nextAyah.urduAudio || nextArabicUrl) : nextArabicUrl) || "";
         nextAudioRef.current.load();
       }
 
@@ -394,7 +401,9 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
 
         // Prefetch next Arabic audio
         if (data.arabicAyahs[currentAyahIndex + 1] && nextAudioRef.current) {
-          nextAudioRef.current.src = data.arabicAyahs[currentAyahIndex + 1].audio || "";
+          const nextAyah = data.arabicAyahs[currentAyahIndex + 1];
+          const nextSNum = nextAyah.surah?.number || surahNumber || 1;
+          nextAudioRef.current.src = getReciterAudioUrl(activeReciter.id, nextSNum, nextAyah.numberInSurah);
           nextAudioRef.current.load();
         }
       } else {
@@ -438,7 +447,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
         }, 80);
       }
     }
-  }, [isPlaying, currentAyahIndex, data, volume, isTranslationPlaying, isPashtoPlaying, settings.audioMode, isAutoScrolling, isUrduSpeaking, speakUrdu, scrollElementToCenter]);
+  }, [isPlaying, currentAyahIndex, data, volume, isTranslationPlaying, isPashtoPlaying, settings.audioMode, activeReciter.id, surahNumber, isAutoScrolling, isUrduSpeaking, speakUrdu, scrollElementToCenter]);
 
   const playAyah = useCallback((index: number) => {
     if (!data) return;
@@ -655,8 +664,8 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
 
       let index = -1;
 
-      // 1. Precise Word-Level Timestamps from Quran.com / Alafasy
-      if (ayah.segments && ayah.segments.length > 0) {
+      // 1. Precise Word-Level Timestamps from Quran.com (Alafasy only)
+      if (activeReciter.id === 'alafasy' && ayah.segments && ayah.segments.length > 0) {
         const currentMs = audio.currentTime * 1000;
         
         // Find segment covering currentTime
@@ -731,7 +740,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
     return () => audio.removeEventListener('timeupdate', handleTimeUpdate);
-  }, [currentAyahIndex, data, isAutoScrolling, isTranslationPlaying, isPashtoPlaying, scrollElementToCenter]);
+  }, [currentAyahIndex, data, activeReciter.id, isAutoScrolling, isTranslationPlaying, isPashtoPlaying, scrollElementToCenter]);
 
   const getThemeClasses = () => {
     switch(settings.theme) {
@@ -880,11 +889,16 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                 const aNum = ayah.numberInSurah;
                 const surahStr = sNum.toString().padStart(3, '0');
                 const ayahStr = aNum.toString().padStart(3, '0');
-                
-                // Fallback to QuranicAudio.com if not tried yet
-                if (!audio.src.includes('quranicaudio.com')) {
-                    const fallbackUrl = `https://download.quranicaudio.com/quran/mishary_rashid_alafasy/${surahStr}${ayahStr}.mp3`;
-                    audio.src = fallbackUrl;
+                const primaryUrl = getReciterAudioUrl(activeReciter.id, sNum, aNum);
+                const secondaryEveryAyahUrl = getReciterFallbackAudioUrl(activeReciter.id, sNum, aNum);
+                const quranicAudioFallbackUrl = `https://download.quranicaudio.com/quran/mishary_rashid_alafasy/${surahStr}${ayahStr}.mp3`;
+
+                if (audio.src === primaryUrl && secondaryEveryAyahUrl !== primaryUrl) {
+                    audio.src = secondaryEveryAyahUrl;
+                    audio.load();
+                    audio.play().catch(() => handleAyahEnd());
+                } else if (!audio.src.includes('quranicaudio.com')) {
+                    audio.src = quranicAudioFallbackUrl;
                     audio.load();
                     audio.play().catch(() => handleAyahEnd());
                 } else {
@@ -1025,10 +1039,37 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                         </div>
                     </div>
                     <div>
+                        <label className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 mb-1 block text-right">قاری کا انتخاب (Quran Reciter — {QURAN_RECITERS.length} Available)</label>
+                        <button
+                            onClick={() => {
+                                setShowSettings(false);
+                                setShowReciterModal(true);
+                            }}
+                            className={`w-full p-3 rounded-2xl border-2 transition-all flex items-center justify-between gap-3 text-left ${
+                                settings.theme === 'dark'
+                                    ? 'bg-gray-800 border-gray-700 hover:border-emerald-500 text-white'
+                                    : 'bg-gray-50 border-gray-200 hover:border-emerald-500 text-black'
+                            }`}
+                        >
+                            <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center flex-shrink-0">
+                                    <Headphones size={18} />
+                                </div>
+                                <div className="min-w-0">
+                                    <div className="font-bold text-xs sm:text-sm truncate">{activeReciter.name}</div>
+                                    <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-arabic font-bold truncate">{activeReciter.arabicName} • {activeReciter.style}</div>
+                                </div>
+                            </div>
+                            <span className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider flex-shrink-0">
+                                Change
+                            </span>
+                        </button>
+                    </div>
+                    <div>
                         <button 
                             onClick={() => {
                                 if (audioRef.current) {
-                                    audioRef.current.src = BISMILLAH_AUDIO;
+                                    audioRef.current.src = getReciterAudioUrl(activeReciter.id, 1, 1);
                                     audioRef.current.muted = false;
                                     audioRef.current.volume = volume;
                                     audioRef.current.play()
@@ -1039,7 +1080,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                             className="w-full py-2.5 rounded-xl font-bold border-2 border-emerald-500 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-all shadow-sm flex items-center justify-center gap-1.5 text-[10px]"
                         >
                             <Volume2 size={14} />
-                            ٹیسٹ آڈیو (Test Audio)
+                            ٹیسٹ آڈیو (Test Audio: {activeReciter.name})
                         </button>
                     </div>
                 </div>
@@ -1078,13 +1119,13 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
             <button onClick={() => { if(currentAyahIndex < (data?.arabicAyahs.length || 0) - 1) { setCurrentAyahIndex(prev => prev + 1); setIsTranslationPlaying(false); setActiveWordIndex(-1); activeWordIndexRef.current = -1; } }} disabled={currentAyahIndex >= (data?.arabicAyahs.length || 0) - 1} className="p-2 opacity-60 hover:opacity-100 active-press disabled:opacity-20"><SkipForward size={20} /></button>
          </div>
 
-         <div className="flex-1 px-6 hidden lg:block">
-            <div className="flex justify-between items-center mb-1.5">
-                <span className="text-[11px] font-black uppercase tracking-widest text-emerald-600">
-                    {currentAyahIndex === -1 ? 'Select an Ayah' : isTranslationPlaying ? `Ayah ${currentAyahIndex + 1} (Urdu Translation)` : isPashtoPlaying ? `Ayah ${currentAyahIndex + 1} (Pashto Translation)` : `Ayah ${currentAyahIndex + 1} (Arabic Recitation)`}
+         <div className="flex-1 px-4 hidden lg:block min-w-0">
+            <div className="flex justify-between items-center mb-1.5 gap-2">
+                <span className="text-[11px] font-black uppercase tracking-widest text-emerald-600 truncate">
+                    {currentAyahIndex === -1 ? 'Select an Ayah' : isTranslationPlaying ? `Ayah ${currentAyahIndex + 1} (Urdu Translation)` : isPashtoPlaying ? `Ayah ${currentAyahIndex + 1} (Pashto Translation)` : `Ayah ${currentAyahIndex + 1} (${activeReciter.name})`}
                     {isAudioLoading && ' (Loading...)'}
                 </span>
-                <span className="text-[11px] font-black uppercase tracking-widest opacity-40">
+                <span className="text-[11px] font-black uppercase tracking-widest opacity-40 flex-shrink-0">
                     {data?.arabicAyahs.length || 0} Ayahs Total
                 </span>
             </div>
@@ -1096,7 +1137,20 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
             </div>
          </div>
 
-         <div className="flex items-center gap-4 sm:gap-6">
+         <div className="flex items-center gap-2 sm:gap-4">
+            <button
+                onClick={() => setShowReciterModal(true)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all active-press ${
+                  settings.theme === 'dark'
+                    ? 'bg-gray-800 border-gray-700 text-emerald-400 hover:bg-gray-700'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+                }`}
+                title="Change Quran Reciter (46 Qaris)"
+            >
+                <Headphones size={15} className="flex-shrink-0" />
+                <span className="truncate max-w-[90px] sm:max-w-[140px]">{activeReciter.name}</span>
+                <ChevronDown size={13} className="opacity-60 flex-shrink-0" />
+            </button>
             <div className="flex items-center gap-3 group">
                 <button 
                     onClick={() => {
@@ -1238,7 +1292,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                             <div className="flex items-center justify-between px-4 pt-3 pb-1 border-b border-emerald-500/20">
                                 <div className="flex items-center gap-2 px-3 py-1 bg-emerald-600 text-white rounded-full text-[10px] font-black tracking-wider shadow-sm animate-pulse">
                                     <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
-                                    <span>تلاوتِ قرآن جاری ہے • Recitation in Progress</span>
+                                    <span>تلاوتِ قرآن جاری ہے • {activeReciter.name}</span>
                                 </div>
                                 <span className="text-xs font-black text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md">آیت {ayah.numberInSurah}</span>
                             </div>
@@ -1467,7 +1521,16 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
         context={juzNumber 
           ? `Reading Para ${juzNumber} in the authentic Taj Quran Lahore style. Currently at Ayah ${currentAyahIndex + 1}.`
           : `Reading Surah ${(data as CombinedSurahData)?.surahInfo?.englishName} in the authentic Taj Quran Lahore style. Currently at Ayah ${currentAyahIndex + 1}.`
-        } 
+        }
+      />
+      <ReciterSelectorModal
+        isOpen={showReciterModal}
+        onClose={() => setShowReciterModal(false)}
+        selectedReciterId={activeReciter.id}
+        onSelectReciter={(reciterId) => {
+          onUpdateSettings({ ...settings, reciter: reciterId });
+        }}
+        theme={settings.theme}
       />
     </div>
   );

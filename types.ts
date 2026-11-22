@@ -98,6 +98,7 @@ export interface AppSettings {
   script: ScriptStyle;
   audioMode: AudioMode;
   recitationMode: RecitationMode;
+  reciter?: string;
   showEnglish: boolean;
   showTafseer: boolean;
   showPashto: boolean;

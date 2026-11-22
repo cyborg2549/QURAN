@@ -1,5 +1,6 @@
 import { Surah, CombinedSurahData, SurahDetail, ScriptStyle, CombinedJuzData } from '../types';
 import { dbService } from './db';
+import { DEFAULT_RECITER_ID, getReciterAudioUrl } from './reciters';
 
 const BASE_URL = 'https://api.alquran.cloud/v1';
 const LIST_CACHE_KEY = 'quran_surah_list_v4'; 
@@ -175,8 +176,8 @@ export const getSurahDetails = async (surahNumber: number, script: ScriptStyle =
       return {
         ...ayah,
         text: cleanText,
-        // Direct, fast EveryAyah audio (never 404s, standard 128kbps Alafasy)
-        audio: `https://everyayah.com/data/Alafasy_128kbps/${surahStr}${ayahStr}.mp3`,
+        // Direct, fast EveryAyah audio (default Alafasy, dynamically overridden by user's selected reciter)
+        audio: getReciterAudioUrl(DEFAULT_RECITER_ID, sNum, aNum),
         // Direct, fast EveryAyah Urdu audio (Shamshad Ali Khan)
         urduAudio: `https://everyayah.com/data/translations/urdu_shamshad_ali_khan_46kbps/${surahStr}${ayahStr}.mp3`,
         pashtoAudio: undefined,
@@ -285,7 +286,7 @@ export const getJuzDetails = async (juzNumber: number, script: ScriptStyle = 'in
       return {
         ...ayah,
         text: cleanText,
-        audio: `https://everyayah.com/data/Alafasy_128kbps/${surahStr}${ayahStr}.mp3`,
+        audio: getReciterAudioUrl(DEFAULT_RECITER_ID, sNum, aNum),
         urduAudio: `https://everyayah.com/data/translations/urdu_shamshad_ali_khan_46kbps/${surahStr}${ayahStr}.mp3`,
         pashtoAudio: undefined
       };

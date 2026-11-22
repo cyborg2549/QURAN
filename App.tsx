@@ -4,6 +4,7 @@ import Footer from './components/Footer';
 import OfflineIndicator from './components/OfflineIndicator';
 import LoadingSpinner from './components/LoadingSpinner';
 import { dbService } from './services/db';
+import { DEFAULT_RECITER_ID } from './services/reciters';
 import { AppSettings } from './types';
 
 const Reader = lazy(() => import('./components/Reader'));
@@ -38,6 +39,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   script: 'indopak', // Explicitly default to IndoPak
   audioMode: 'both',
   recitationMode: 'surah',
+  reciter: DEFAULT_RECITER_ID,
   showEnglish: false,
   showTafseer: true, // Enabled by default as it's the primary Urdu content now
   showPashto: false,
@@ -206,6 +208,7 @@ const App: React.FC = () => {
             onSelectJuz={handleSelectJuz}
             onGoToAbout={handleGoToAbout} 
             settings={settings}
+            onUpdateSettings={setSettings}
             initialViewMode={dashboardTab}
             onViewModeChange={setDashboardTab}
           />

@@ -2,14 +2,16 @@ import React, { useState, useEffect } from 'react';
 import {
   Search, Book, Bookmark as BookmarkIcon, Trash2, Info, CheckCircle2,
   WifiOff, Sparkles, Download, CloudDownload, X, Mail, Phone,
-  Share2, Check
+  Share2, Check, Headphones
 } from 'lucide-react';
 import { Surah, Bookmark, AppSettings } from '../types';
 import { getSurahList, downloadQuranData } from '../services/quranApi';
+import { getReciterById, QURAN_RECITERS } from '../services/reciters';
 import { dbService } from '../services/db';
 import LoadingSpinner from './LoadingSpinner';
 import AIChat from './AIChat';
 import PWAInstallButton from './PWAInstallButton';
+import ReciterSelectorModal from './ReciterSelectorModal';
 import { PERMANENT_AUTHOR_PHOTO } from '../src/assets/authorPhoto';
 
 interface SurahListProps {
@@ -17,6 +19,7 @@ interface SurahListProps {
   onSelectJuz: (juzNumber: number) => void;
   onGoToAbout: (tab?: 'profile' | 'arabi' | 'seerah') => void;
   settings: AppSettings;
+  onUpdateSettings?: (settings: AppSettings) => void;
   initialViewMode?: 'surah' | 'juz';
   onViewModeChange?: (mode: 'surah' | 'juz') => void;
 }
@@ -26,6 +29,7 @@ const SurahList: React.FC<SurahListProps> = ({
   onSelectJuz,
   onGoToAbout,
   settings,
+  onUpdateSettings,
   initialViewMode,
   onViewModeChange
 }) => {
@@ -43,6 +47,8 @@ const SurahList: React.FC<SurahListProps> = ({
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [downloadCompleted, setDownloadCompleted] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showReciterModal, setShowReciterModal] = useState(false);
+  const activeReciter = getReciterById(settings.reciter);
 
   useEffect(() => {
     if (initialViewMode) {
@@ -169,6 +175,15 @@ const SurahList: React.FC<SurahListProps> = ({
               <button onClick={() => setShowDownloadModal(true)} className="flex items-center gap-2 bg-white/10 text-emerald-400 hover:text-white hover:bg-white/20 px-4 py-2.5 rounded-2xl transition-all text-xs font-bold border border-white/10 shadow-sm active-press">
                 <CloudDownload size={16} />
                 <span className="hidden sm:inline">Download</span>
+              </button>
+              <button
+                onClick={() => setShowReciterModal(true)}
+                className="flex items-center gap-2 bg-white/10 text-gold-300 hover:text-white hover:bg-white/20 px-4 py-2.5 rounded-2xl transition-all text-xs font-bold border border-white/10 shadow-sm active-press"
+                title={`Active Reciter: ${activeReciter.name}`}
+              >
+                <Headphones size={16} />
+                <span className="hidden sm:inline">Reciters ({QURAN_RECITERS.length})</span>
+                <span className="sm:hidden">Qari</span>
               </button>
               <button onClick={handleShare} className="flex items-center gap-2 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 px-4 py-2.5 rounded-2xl transition-all text-xs font-bold border border-emerald-500/20 shadow-sm active-press">
                 {copied ? <Check size={16} /> : <Share2 size={16} />}
@@ -429,6 +444,17 @@ const SurahList: React.FC<SurahListProps> = ({
       )}
 
       <AIChat context="User is browsing Surah Index" isOpen={showChat} onClose={() => setShowChat(false)} />
+      <ReciterSelectorModal
+        isOpen={showReciterModal}
+        onClose={() => setShowReciterModal(false)}
+        selectedReciterId={activeReciter.id}
+        onSelectReciter={(reciterId) => {
+          if (onUpdateSettings) {
+            onUpdateSettings({ ...settings, reciter: reciterId });
+          }
+        }}
+        theme="paper"
+      />
     </div>
   );
 };
