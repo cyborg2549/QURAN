@@ -33,7 +33,9 @@ export interface Ayah {
   hizbQuarter: number;
   sajda: boolean | { id: number; recommended: boolean; obligatory: boolean };
   audio?: string;
+  urduAudio?: string;
   pashtoAudio?: string;
+  segments?: [number, number, number][]; // [wordPosition, startMs, endMs]
   surah?: {
     number: number;
     name: string;
@@ -84,9 +86,9 @@ export interface Bookmark {
 }
 
 export type ThemeType = 'paper' | 'dark' | 'sepia';
-export type FontSize = 'sm' | 'base' | 'lg' | 'xl' | '2xl';
+export type FontSize = number;
 export type ScriptStyle = 'uthmani' | 'indopak';
-export type AudioMode = 'arabic' | 'urdu' | 'pashto' | 'both' | 'both-pashto';
+export type AudioMode = 'arabic' | 'urdu' | 'pashto' | 'both' | 'ar_ps';
 export type RecitationMode = 'surah' | 'continuous' | 'selective';
 
 export interface AppSettings {

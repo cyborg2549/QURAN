@@ -1,0 +1,10 @@
+node_modules
+dist
+dev-dist
+.git
+.aistudio
+migrated_prompt_history
+public/assets/aistudio
+.author-photo.json
+*.log
+.DS_Store

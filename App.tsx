@@ -1,23 +1,49 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import SurahList from './components/SurahList';
-import Reader from './components/Reader';
-import AboutAuthor from './components/AboutAuthor';
 import Footer from './components/Footer';
+import OfflineIndicator from './components/OfflineIndicator';
+import LoadingSpinner from './components/LoadingSpinner';
+import { dbService } from './services/db';
 import { AppSettings } from './types';
+
+const Reader = lazy(() => import('./components/Reader'));
+const AboutAuthor = lazy(() => import('./components/AboutAuthor'));
+
+const mapLegacyFontSize = (size: any, isArabic: boolean): number => {
+  if (typeof size === 'number') return size;
+  const mapping: Record<string, number> = isArabic ? {
+    'sm': 36,
+    'base': 48,
+    'lg': 56,
+    'xl': 72,
+    '2xl': 96,
+    '3xl': 110,
+    '4xl': 130
+  } : {
+    'sm': 16,
+    'base': 20,
+    'lg': 24,
+    'xl': 28,
+    '2xl': 36,
+    '3xl': 48,
+    '4xl': 60
+  };
+  return mapping[size] || (isArabic ? 56 : 24);
+};
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'paper',
-  fontSize: 'lg',
-  tafseerFontSize: 'lg', // Default for Urdu Tafseer
+  fontSize: 56,
+  tafseerFontSize: 24, // Default for Urdu Tafseer
   script: 'indopak', // Explicitly default to IndoPak
-  audioMode: 'both-pashto',
+  audioMode: 'both',
   recitationMode: 'surah',
   showEnglish: false,
   showTafseer: true, // Enabled by default as it's the primary Urdu content now
-  showPashto: true // Enabled by default as per user request
+  showPashto: false,
 };
 
-const SETTINGS_KEY = 'quran_settings_v7'; // Version bumped to v7 to force new defaults
+const SETTINGS_KEY = 'quran_settings_v10'; // Version bumped to v10 for speed optimizations
 
 const App: React.FC = () => {
   const [view, setView] = useState<'list' | 'reader' | 'about'>('list');
@@ -25,19 +51,33 @@ const App: React.FC = () => {
   const [currentJuz, setCurrentJuz] = useState<number | undefined>(undefined);
   const [currentAyah, setCurrentAyah] = useState<number | undefined>(undefined);
   
+  const [accountTab, setAccountTab] = useState<'profile' | 'arabi' | 'seerah'>('profile');
+  const [dashboardTab, setDashboardTab] = useState<'surah' | 'juz'>('juz');
+  
   // Settings State
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const saved = localStorage.getItem(SETTINGS_KEY);
       if (saved) {
         // Merge saved settings with defaults to ensure new fields are present
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_SETTINGS,
+          ...parsed,
+          fontSize: mapLegacyFontSize(parsed.fontSize, true),
+          tafseerFontSize: mapLegacyFontSize(parsed.tafseerFontSize, false)
+        };
       } else {
           // Try to recover old settings but merge with new defaults
           const oldSaved = localStorage.getItem('quran_settings_v5');
           if (oldSaved) {
               const old = JSON.parse(oldSaved);
-              return { ...DEFAULT_SETTINGS, ...old };
+              return {
+                ...DEFAULT_SETTINGS,
+                ...old,
+                fontSize: mapLegacyFontSize(old.fontSize, true),
+                tafseerFontSize: mapLegacyFontSize(old.tafseerFontSize, false)
+              };
           }
           return DEFAULT_SETTINGS;
       }
@@ -50,6 +90,7 @@ const App: React.FC = () => {
   useEffect(() => {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      dbService.saveUserData(SETTINGS_KEY, settings).catch(() => {});
     } catch (e) {
       console.warn("LocalStorage save failed", e);
     }
@@ -58,7 +99,29 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash;
-      if (hash === '#about') {
+      if (hash === '#about' || hash === '#account' || hash === '#profile') {
+        setView('about');
+        setAccountTab('profile');
+      } else if (
+        hash === '#account/arabi' || hash === '#about/arabi' || 
+        hash === '#arabi' || hash === '#app/arabi' || hash === '#/arabi' || hash === '#apps/arabi'
+      ) {
+        setView('about');
+        setAccountTab('arabi');
+      } else if (
+        hash === '#account/seerah' || hash === '#about/seerah' || 
+        hash === '#seerah' || hash === '#app/seerah' || hash === '#/seerah' || hash === '#apps/seerah'
+      ) {
+        setView('about');
+        setAccountTab('seerah');
+      } else if (hash.startsWith('#account?') || hash.startsWith('#about?')) {
+        const queryParams = new URLSearchParams(hash.split('?')[1]);
+        const tabParam = queryParams.get('tab') as any;
+        if (tabParam && ['profile', 'arabi', 'seerah'].includes(tabParam)) {
+          setAccountTab(tabParam);
+        } else {
+          setAccountTab('profile');
+        }
         setView('about');
       } else if (hash.startsWith('#surah/')) {
         const parts = hash.split('/');
@@ -121,8 +184,9 @@ const App: React.FC = () => {
     window.location.hash = '';
   };
 
-  const handleGoToAbout = () => {
-    window.location.hash = 'about';
+  const handleGoToAbout = (tab: 'profile' | 'arabi' | 'seerah' = 'profile') => {
+    setAccountTab(tab);
+    window.location.hash = tab === 'profile' ? 'account' : `account/${tab}`;
   };
 
   const handleGoToHome = () => {
@@ -142,24 +206,35 @@ const App: React.FC = () => {
             onSelectJuz={handleSelectJuz}
             onGoToAbout={handleGoToAbout} 
             settings={settings}
+            initialViewMode={dashboardTab}
+            onViewModeChange={setDashboardTab}
           />
         )}
         {view === 'reader' && (
-          <Reader 
-            surahNumber={currentSurah} 
-            juzNumber={currentJuz}
-            initialAyah={currentAyah} 
-            onBack={handleBack} 
-            onNextSurah={handleNextSurah}
-            onNextJuz={handleNextJuz}
-            settings={settings}
-            onUpdateSettings={setSettings}
-          />
+          <Suspense fallback={<LoadingSpinner />}>
+            <Reader 
+              surahNumber={currentSurah} 
+              juzNumber={currentJuz}
+              initialAyah={currentAyah} 
+              onBack={handleBack} 
+              onNextSurah={handleNextSurah}
+              onNextJuz={handleNextJuz}
+              settings={settings}
+              onUpdateSettings={setSettings}
+            />
+          </Suspense>
         )}
         {view === 'about' && (
-          <AboutAuthor 
-            onBack={handleBack} 
-          />
+          <Suspense fallback={<LoadingSpinner />}>
+            <AboutAuthor 
+              onBack={handleBack}
+              activeTab={accountTab}
+              onTabChange={(newTab) => {
+                setAccountTab(newTab);
+                window.location.hash = newTab === 'profile' ? 'account' : `account/${newTab}`;
+              }}
+            />
+          </Suspense>
         )}
       </main>
 
@@ -168,6 +243,9 @@ const App: React.FC = () => {
         onGoToHome={handleGoToHome}
         onGoToAbout={handleGoToAbout}
       />
+
+      {/* Global Offline Mode Status Banner */}
+      <OfflineIndicator />
     </div>
   );
 };

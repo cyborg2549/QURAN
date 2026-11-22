@@ -1,9 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Amiri:wght@400;700&family=Scheherazade+New:wght@400;700&family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
 @import "tailwindcss";
+
+@font-face {
+  font-family: 'Al Qalam Quran Majeed';
+  src: url('/fonts/AlQalamQuranMajeed.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'AlQalamQuranMajeed';
+  src: url('/fonts/AlQalamQuranMajeed.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-arabic: "Amiri", serif;
-  --font-indopak: "Scheherazade New", Lateef, serif;
+  --font-arabic: "Al Qalam Quran Majeed", "AlQalamQuranMajeed", "Amiri", serif;
+  --font-indopak: "Al Qalam Quran Majeed", "AlQalamQuranMajeed", "Scheherazade New", Lateef, serif;
   --font-urdu: "Noto Nastaliq Urdu", serif;
 
   --color-emerald-50: #ecfdf5;
@@ -60,43 +77,30 @@ body {
   border-radius: 10px;
 }
 
-/* THE TAJ QURAN LAHORE PERFECT RENDER ENGINE */
-.font-indopak {
-  line-height: 2.8 !important; 
-  font-weight: 700;
+/* THE AL QALAM QURAN MAJEED PERFECT RENDER ENGINE */
+.font-indopak, .font-quran, .font-alqalam {
+  font-family: 'Al Qalam Quran Majeed', 'AlQalamQuranMajeed', 'Scheherazade New', Lateef, serif !important;
+  line-height: 2.4 !important; 
+  font-weight: normal;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  letter-spacing: -0.02em !important;
-  word-spacing: 0.1em;
+  letter-spacing: 0 !important;
+  word-spacing: 0.05em;
   color: #000000;
-  
-  /* IndoPak specific feature settings for Scheherazade New */
-  font-feature-settings: 
-    "cv05" 1, /* Alternate Meem */
-    "cv08" 1, /* Alternate Heh */
-    "cv10" 1, /* Alternate Yeh */
-    "cv48" 1, /* Alternate Jeem */
-    "cv70" 1, /* Alternate Qaf */
-    "ss01" 1, /* IndoPak style */
-    "ss02" 1, /* Additional IndoPak ligatures */
-    "kern" 1;
-    
-  padding-top: 0.8rem !important;
-  padding-bottom: 0.8rem !important;
+  padding-top: 0.4rem !important;
+  padding-bottom: 0.4rem !important;
   display: inline-block;
   overflow: visible !important;
-  
-  /* Simulate the thick, bold ink of the Taj Quran print */
-  text-shadow: 0.5px 0 0px #000, -0.2px 0 0px #000;
-  
-  /* Ensure the font is large and clear */
-  font-size: 1.25em;
+}
+
+.font-arabic {
+  font-family: 'Al Qalam Quran Majeed', 'AlQalamQuranMajeed', 'Amiri', serif !important;
 }
 
 /* Style for the Ayah End symbol (U+06DD) */
-.font-indopak span:last-child {
-  font-family: "Scheherazade New", serif;
-  font-size: 0.9em;
+.font-indopak span:last-child, .font-alqalam span:last-child {
+  font-family: 'Al Qalam Quran Majeed', 'AlQalamQuranMajeed', "Scheherazade New", serif;
+  font-size: 0.95em;
   margin-right: 0.2em;
   color: #000;
   opacity: 0.8;

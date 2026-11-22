@@ -2,12 +2,15 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { 
   ArrowLeft, Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, 
   Loader2, Bookmark as BookmarkIcon, BookmarkCheck, 
-  Settings as SettingsIcon, X, Moon, Sun, Type, Sparkles
+  Settings as SettingsIcon, X, Moon, Sun, Type, Sparkles, Share2, Check,
+  Minus, Plus
 } from 'lucide-react';
 import { CombinedSurahData, Bookmark, AppSettings, FontSize, ThemeType, CombinedJuzData } from '../types';
 import { getSurahDetails, getJuzDetails } from '../services/quranApi';
+import { dbService } from '../services/db';
 import LoadingSpinner from './LoadingSpinner';
 import AIChat from './AIChat';
+import PWAInstallButton from './PWAInstallButton';
 
 const BISMILLAH_TEXT = "بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ";
 const BISMILLAH_AUDIO = "https://everyayah.com/data/Alafasy_128kbps/001001.mp3";
@@ -28,7 +31,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentAyahIndex, setCurrentAyahIndex] = useState<number>(-1);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false); // Default to false to avoid sudden noise on fast loads
   const [isAudioLoading, setIsAudioLoading] = useState(false);
   const [isAudioPaused, setIsAudioPaused] = useState(true);
   const [volume, setVolume] = useState(1);
@@ -36,11 +39,32 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSettings, setShowSettings] = useState(false);
   const [showChat, setShowChat] = useState(false);
-  const [isBismillahPlaying, setIsBismillahPlaying] = useState(false);
   const [isUrduSpeaking, setIsUrduSpeaking] = useState(false);
-  const [isPashtoSpeaking, setIsPashtoSpeaking] = useState(false);
   const [isTranslationPlaying, setIsTranslationPlaying] = useState(false);
+  const [isPashtoPlaying, setIsPashtoPlaying] = useState(false);
   const [isAutoScrolling, setIsAutoScrolling] = useState(true);
+
+  const [activeWordIndex, setActiveWordIndex] = useState<number>(-1);
+  const activeWordIndexRef = useRef<number>(-1);
+  const [activeUrduWordIndex, setActiveUrduWordIndex] = useState<number>(-1);
+  const activeUrduWordIndexRef = useRef<number>(-1);
+  const [activePashtoWordIndex, setActivePashtoWordIndex] = useState<number>(-1);
+  const activePashtoWordIndexRef = useRef<number>(-1);
+  const [consecutiveAudioErrors, setConsecutiveAudioErrors] = useState(0);
+
+  // Buffer / Predictor Ref for faster audio switching
+  const nextAudioRef = useRef<HTMLAudioElement | null>(null);
+  
+  useEffect(() => {
+    nextAudioRef.current = new Audio();
+    nextAudioRef.current.preload = 'auto';
+    return () => {
+      if (nextAudioRef.current) {
+        nextAudioRef.current.src = "";
+        nextAudioRef.current.load();
+      }
+    };
+  }, []);
 
   const speakUrdu = useCallback((text: string) => {
     if (!('speechSynthesis' in window)) return;
@@ -48,10 +72,13 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
     window.speechSynthesis.cancel();
     setActiveWordIndex(-1);
     activeWordIndexRef.current = -1;
+    setActiveUrduWordIndex(-1);
+    activeUrduWordIndexRef.current = -1;
     
     const cleanText = text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E6}-\u{1F1FF}]/gu, '').trim();
     if (!cleanText) {
         setIsUrduSpeaking(false);
+        setIsTranslationPlaying(false);
         return;
     }
     
@@ -72,6 +99,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
       
       utterance.onend = () => {
           setIsUrduSpeaking(false);
+          setIsTranslationPlaying(false);
           if (settings.audioMode === 'both' || settings.audioMode === 'urdu') {
               if (currentAyahIndex < (data?.arabicAyahs.length || 0) - 1) {
                   setCurrentAyahIndex(prev => prev + 1);
@@ -87,6 +115,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
       utterance.onerror = (e) => {
           console.error("Urdu TTS Error:", e);
           setIsUrduSpeaking(false);
+          setIsTranslationPlaying(false);
       };
       
       setIsUrduSpeaking(true);
@@ -99,78 +128,17 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
         setVoice();
     }
   }, [currentAyahIndex, data, settings.audioMode]);
-
-  const speakPashto = useCallback((text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    
-    window.speechSynthesis.cancel();
-    setActiveWordIndex(-1);
-    activeWordIndexRef.current = -1;
-    
-    const cleanText = text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E6}-\u{1F1FF}]/gu, '').trim();
-    if (!cleanText) {
-        setIsPashtoSpeaking(false);
-        return;
-    }
-    
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    
-    const setVoice = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const pashtoVoice = voices.find(v => v.lang.toLowerCase().includes('ps')) || 
-                          voices.find(v => v.lang.toLowerCase().includes('ur')) ||
-                          voices.find(v => v.lang.toLowerCase().includes('hi')) ||
-                          voices.find(v => v.lang.toLowerCase().includes('fa'));
-      if (pashtoVoice) {
-        utterance.voice = pashtoVoice;
-        utterance.lang = pashtoVoice.lang;
-      } else {
-        utterance.lang = 'ps-AF';
-      }
-      utterance.rate = 0.95;
-      
-      utterance.onend = () => {
-          setIsPashtoSpeaking(false);
-          if (settings.audioMode === 'both-pashto' || settings.audioMode === 'pashto') {
-              if (currentAyahIndex < (data?.arabicAyahs.length || 0) - 1) {
-                  setCurrentAyahIndex(prev => prev + 1);
-                  setActiveWordIndex(-1);
-                  activeWordIndexRef.current = -1;
-              } else {
-                  setIsPlaying(false);
-                  setCurrentAyahIndex(-1);
-              }
-          }
-      };
-      
-      utterance.onerror = (e) => {
-          console.error("Pashto TTS Error:", e);
-          setIsPashtoSpeaking(false);
-      };
-      
-      setIsPashtoSpeaking(true);
-      window.speechSynthesis.speak(utterance);
-    };
-
-    if (window.speechSynthesis.getVoices().length === 0) {
-        window.speechSynthesis.onvoiceschanged = setVoice;
-    } else {
-        setVoice();
-    }
-  }, [currentAyahIndex, data, settings.audioMode]);
-  const [activeWordIndex, setActiveWordIndex] = useState<number>(-1);
-  const activeWordIndexRef = useRef<number>(-1);
-  const [consecutiveAudioErrors, setConsecutiveAudioErrors] = useState(0);
   
   useEffect(() => {
     setConsecutiveAudioErrors(0);
   }, [surahNumber, juzNumber]);
 
-  const [visibleCount, setVisibleCount] = useState(20);
+  const visibleCountDefault = 20;
+  const [visibleCount, setVisibleCount] = useState(visibleCountDefault);
+  const initialScrollDoneRef = useRef<boolean>(false);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const hasPlayedBismillahRef = useRef<boolean>(false);
 
   useEffect(() => {
     const handleStatus = () => setIsOnline(navigator.onLine);
@@ -205,27 +173,42 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
   }, [isPlaying]);
 
   useEffect(() => {
-    const saved = localStorage.getItem('quran_bookmarks');
-    if (saved) setBookmarks(JSON.parse(saved));
+    dbService.getUserData<Bookmark[]>('quran_bookmarks', []).then(saved => {
+      if (saved && saved.length > 0) setBookmarks(saved);
+    });
   }, []);
 
+  // Handle initial ayah scroll
+  useEffect(() => {
+    if (!data || loading || !initialAyah || initialScrollDoneRef.current) return;
+    
+    let timeoutId: NodeJS.Timeout;
+    let retryCount = 0;
+    const maxRetries = 10;
+
+    const scrollToInitial = () => {
+        if (!data) return;
+        const element = document.getElementById(`ayah-${initialAyah}`);
+        if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            initialScrollDoneRef.current = true;
+        } else if (retryCount < maxRetries) {
+            retryCount++;
+            setVisibleCount(prev => Math.min(prev + 20, data.arabicAyahs.length));
+            timeoutId = setTimeout(scrollToInitial, 250);
+        } else {
+            initialScrollDoneRef.current = true; // Give up after max retries
+        }
+    };
+
+    timeoutId = setTimeout(scrollToInitial, 800);
+    return () => clearTimeout(timeoutId);
+  }, [data, loading, initialAyah]);
+
+  // Infinite scroll observer
   useEffect(() => {
     if (!data || loading) return;
     
-    // Handle initial ayah scroll more robustly
-    if (initialAyah) {
-        const scrollToInitial = () => {
-            const element = document.getElementById(`ayah-${initialAyah}`);
-            if (element) {
-                element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            } else if (visibleCount < (data.arabicAyahs.length)) {
-                setVisibleCount(prev => Math.min(prev + 20, data.arabicAyahs.length));
-                setTimeout(scrollToInitial, 100);
-            }
-        };
-        setTimeout(scrollToInitial, 800);
-    }
-
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
@@ -236,15 +219,16 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
     );
     if (loadMoreRef.current) observer.observe(loadMoreRef.current);
     return () => { if (loadMoreRef.current) observer.unobserve(loadMoreRef.current); };
-  }, [data, loading, visibleCount]);
+  }, [data, loading]); // Removed visibleCount from dependencies
 
   const fetchDetails = useCallback(async () => {
     setLoading(true);
     setError(null);
     setCurrentAyahIndex(-1);
     setIsPlaying(false);
-    setIsBismillahPlaying(false);
-    hasPlayedBismillahRef.current = false;
+    setIsTranslationPlaying(false);
+    setIsPashtoPlaying(false);
+    initialScrollDoneRef.current = false; // Reset scroll flag on new fetch
 
     try {
       let result;
@@ -256,7 +240,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
 
       if (result) {
         setData(result);
-        if (initialAyah) {
+        if (initialAyah && !isNaN(initialAyah)) {
           setVisibleCount(Math.max(20, initialAyah + 10));
         } else {
           setVisibleCount(20);
@@ -284,15 +268,43 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
       ? bookmarks.filter(b => !(b.surahNumber === actualSurahNumber && b.ayahNumber === ayahNumberInSurah))
       : [{ surahNumber: actualSurahNumber, ayahNumber: ayahNumberInSurah, surahName: actualSurahName, timestamp: Date.now() }, ...bookmarks];
     setBookmarks(updated);
-    localStorage.setItem('quran_bookmarks', JSON.stringify(updated));
+    dbService.saveUserData('quran_bookmarks', updated).catch(() => {});
   };
+
+  // Accurate viewport-aware centering: centers active Arabic text or Urdu translation in visible reading area
+  const scrollElementToCenter = useCallback((element: HTMLElement | null, behavior: ScrollBehavior = 'smooth') => {
+    if (!element) return;
+
+    // Calculate top fixed player bar (75px) + sticky header height
+    const headerBottom = headerRef.current 
+      ? headerRef.current.getBoundingClientRect().bottom 
+      : 155;
+    const topSafeOffset = Math.max(75, headerBottom);
+    const viewportHeight = window.innerHeight;
+    const visibleHeight = Math.max(200, viewportHeight - topSafeOffset);
+    
+    // Middle point of the visible viewport area
+    const targetCenterY = topSafeOffset + (visibleHeight / 2);
+    
+    const rect = element.getBoundingClientRect();
+    const elementCenterY = rect.top + (rect.height / 2);
+    
+    const diff = elementCenterY - targetCenterY;
+    
+    // Smoothly reposition if not already in the middle
+    if (Math.abs(diff) > 15) {
+      window.scrollBy({
+        top: diff,
+        behavior
+      });
+    }
+  }, []);
 
   // Consolidated Audio Control Logic
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !data) return;
 
-    // Ensure volume is synced
     audio.volume = volume;
 
     if (!isPlaying) {
@@ -300,224 +312,426 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
       return;
     }
 
-    // If we have a valid index and we are playing
-    if (currentAyahIndex !== -1 && !isTranslationPlaying) {
-      const ayah = data.arabicAyahs[currentAyahIndex];
-      
-      // Handle Urdu only mode
-      if (settings.audioMode === 'urdu') {
-          if (!isUrduSpeaking) {
-              const urduText = data.tafseerAyahs[currentAyahIndex].text;
-              speakUrdu(urduText);
-          }
-          return;
-      }
-
-      // Handle Pashto only mode
-      if (settings.audioMode === 'pashto') {
-          if (!isPashtoSpeaking) {
-              const pashtoText = data.pashtoAyahs[currentAyahIndex].text;
-              speakPashto(pashtoText);
-          }
-          return;
-      }
-
-      // If we are currently speaking Urdu or Pashto in 'both' modes, don't play Arabic
-      if (isUrduSpeaking || isPashtoSpeaking) return;
-
-      // Handle Bismillah logic first
-      if (currentAyahIndex === 0 && surahNumber !== 9 && surahNumber !== 1 && !hasPlayedBismillahRef.current) {
-        if (!isBismillahPlaying) {
-          setIsBismillahPlaying(true);
-          const bismillahUrl = `${BISMILLAH_AUDIO}?cb=${Date.now()}`;
-          audio.src = bismillahUrl;
-          audio.load();
-          audio.play().catch(err => {
-            if (err.name === 'NotAllowedError') {
-                console.warn("Autoplay blocked for Bismillah. Waiting for user interaction.");
-                setIsAudioPaused(true);
-            } else if (err.name !== 'AbortError') {
-                console.error("Bismillah Play Error:", err);
-                setIsBismillahPlaying(false);
-                hasPlayedBismillahRef.current = true;
-                setConsecutiveAudioErrors(prev => prev + 1);
-                playAyah(0);
-            }
-          });
-        }
-        return;
-      }
-
-      // Normal Ayah Playback
-      if (ayah.audio && !audio.src.includes(ayah.audio)) {
-        audio.pause();
-        // Add cache-busting to the URL to force re-fetch and avoid stale/broken cache
-        const audioUrl = ayah.audio.includes('?') ? `${ayah.audio}&cb=${Date.now()}` : `${ayah.audio}?cb=${Date.now()}`;
-        audio.src = audioUrl;
-        audio.load();
-        audio.muted = false;
-        audio.volume = volume;
-        
-        const playPromise = audio.play();
-        if (playPromise !== undefined) {
-          playPromise.catch(err => {
-            if (err.name === 'NotAllowedError') {
-                console.warn("Autoplay blocked for Ayah. Waiting for user interaction.");
-                setIsAudioPaused(true);
-            } else if (err.name !== 'AbortError') {
-              console.error("Ayah Play Error:", err, "URL:", audioUrl);
-              setConsecutiveAudioErrors(prev => prev + 1);
-              handleAyahEnd();
-            }
-          });
-        }
-
-        // Scroll into view
-        setTimeout(() => {
-          const element = document.getElementById(`ayah-${ayah.numberInSurah}`);
-          if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 100);
-      } else if (audio.paused && isPlaying) {
-        // Resume if paused but src is correct
-        audio.play().catch(err => {
-          if (err.name === 'NotAllowedError') {
-              setIsAudioPaused(true);
-          } else if (err.name !== 'AbortError') {
-              console.error("Resume Error:", err);
-          }
-        });
-      } else if (!isPlaying && !audio.paused) {
-        audio.pause();
-      }
-    } else if (isPlaying && isTranslationPlaying) {
-        // Resume Pashto audio if paused
-        if (audio.paused) {
-            audio.play().catch(err => {
-                if (err.name === 'NotAllowedError') {
-                    setIsAudioPaused(true);
-                } else if (err.name !== 'AbortError') {
-                    console.error("Pashto Resume Error:", err);
-                }
-            });
-        }
-    } else if (isPlaying && currentAyahIndex === -1) {
-      // Start from beginning if playing but no index set
+    if (currentAyahIndex === -1) {
       setCurrentAyahIndex(0);
+      return;
     }
-  }, [isPlaying, currentAyahIndex, data, surahNumber, isBismillahPlaying, volume, isTranslationPlaying]);
+
+    const ayah = data.arabicAyahs[currentAyahIndex];
+    if (!ayah) return;
+
+    // Handle single-language audio modes
+    if (settings.audioMode === 'urdu' && !isTranslationPlaying) {
+      setIsTranslationPlaying(true);
+      return;
+    }
+    if (settings.audioMode === 'pashto' && !isPashtoPlaying) {
+      setIsPashtoPlaying(true);
+      return;
+    }
+
+    if (isUrduSpeaking) return;
+
+    // 1. Arabic Recitation Playback (Recited ONCE)
+    if (!isTranslationPlaying && !isPashtoPlaying) {
+      const audioUrl = ayah.audio;
+      if (audioUrl) {
+        if (!audio.src.includes(audioUrl)) {
+          audio.pause();
+          audio.src = audioUrl;
+          audio.load();
+        }
+        if (audio.paused) {
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(err => {
+              if (err.name === 'NotAllowedError') {
+                setIsAudioPaused(true);
+              } else if (err.name !== 'AbortError') {
+                console.error("Arabic Audio Play Error:", err);
+              }
+            });
+          }
+        }
+      }
+
+      // Prefetch next audio
+      if (data.arabicAyahs[currentAyahIndex + 1] && nextAudioRef.current) {
+        const nextAyah = data.arabicAyahs[currentAyahIndex + 1];
+        nextAudioRef.current.src = (settings.audioMode === 'both' ? (nextAyah.urduAudio || nextAyah.audio) : nextAyah.audio) || "";
+        nextAudioRef.current.load();
+      }
+
+      // Smooth auto-scroll: places the Arabic text under recitation in the middle of the screen
+      if (isAutoScrolling) {
+        setTimeout(() => {
+          const el = document.getElementById(`ayah-arabic-${ayah.numberInSurah}`) || document.getElementById(`ayah-${ayah.numberInSurah}`);
+          if (el) scrollElementToCenter(el);
+        }, 80);
+      }
+    } else if (isTranslationPlaying) {
+      // 2. Urdu Translation Audio Playback (Follows Arabic Recitation ONCE)
+      const urduUrl = ayah.urduAudio;
+      if (urduUrl) {
+        if (!audio.src.includes(urduUrl)) {
+          audio.pause();
+          audio.src = urduUrl;
+          audio.load();
+        }
+        if (audio.paused) {
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(err => {
+              if (err.name !== 'AbortError') {
+                console.warn("Urdu audio playback failed, falling back to TTS:", err);
+                const urduText = data.tafseerAyahs[currentAyahIndex]?.text;
+                if (urduText) speakUrdu(urduText);
+                else handleAyahEnd();
+              }
+            });
+          }
+        }
+
+        // Prefetch next Arabic audio
+        if (data.arabicAyahs[currentAyahIndex + 1] && nextAudioRef.current) {
+          nextAudioRef.current.src = data.arabicAyahs[currentAyahIndex + 1].audio || "";
+          nextAudioRef.current.load();
+        }
+      } else {
+        const urduText = data.tafseerAyahs[currentAyahIndex]?.text;
+        if (urduText && !isUrduSpeaking) speakUrdu(urduText);
+        else if (!urduText) handleAyahEnd();
+      }
+
+      // Smooth auto-scroll: places the Urdu translation below Arabic in the middle of the screen
+      if (isAutoScrolling) {
+        setTimeout(() => {
+          const el = document.getElementById(`ayah-urdu-${ayah.numberInSurah}`);
+          if (el) scrollElementToCenter(el);
+        }, 80);
+      }
+    } else if (isPashtoPlaying) {
+      // 3. Pashto Translation Playback
+      const pashtoUrl = ayah.pashtoAudio;
+      if (pashtoUrl) {
+        if (!audio.src.includes(pashtoUrl)) {
+          audio.pause();
+          audio.src = pashtoUrl;
+          audio.load();
+        }
+        if (audio.paused) {
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(err => {
+              if (err.name !== 'AbortError') handleAyahEnd();
+            });
+          }
+        }
+      } else {
+        handleAyahEnd();
+      }
+
+      if (isAutoScrolling) {
+        setTimeout(() => {
+          const el = document.getElementById(`ayah-pashto-${ayah.numberInSurah}`);
+          if (el) scrollElementToCenter(el);
+        }, 80);
+      }
+    }
+  }, [isPlaying, currentAyahIndex, data, volume, isTranslationPlaying, isPashtoPlaying, settings.audioMode, isAutoScrolling, isUrduSpeaking, speakUrdu, scrollElementToCenter]);
 
   const playAyah = useCallback((index: number) => {
-    // This function now just sets the state, the useEffect handles the side effects
-    if (index >= visibleCount) setVisibleCount(prev => Math.min(prev + 20, data?.arabicAyahs.length || prev));
+    if (!data) return;
+    if (index >= visibleCount) {
+      setVisibleCount(prev => Math.min(prev + 20, data.arabicAyahs.length));
+    }
     setCurrentAyahIndex(index);
     setIsPlaying(true);
     setIsTranslationPlaying(false);
+    setIsPashtoPlaying(false);
     setActiveWordIndex(-1);
     activeWordIndexRef.current = -1;
-  }, [visibleCount, data]);
+    setActiveUrduWordIndex(-1);
+    activeUrduWordIndexRef.current = -1;
+    setActivePashtoWordIndex(-1);
+    activePashtoWordIndexRef.current = -1;
 
-  const handleAyahEnd = () => {
-    if (isBismillahPlaying) {
-        setIsBismillahPlaying(false);
-        hasPlayedBismillahRef.current = true;
-        playAyah(0);
-        return;
-    }
-
-    // If in 'both' mode and we just finished Arabic, play Urdu
-    if (settings.audioMode === 'both' && !isUrduSpeaking && data && currentAyahIndex !== -1) {
-        const urduText = data.tafseerAyahs[currentAyahIndex].text;
-        speakUrdu(urduText);
-        return;
-    }
-
-    // If in 'both-pashto' mode and we just finished Arabic, play Pashto
-    if (settings.audioMode === 'both-pashto' && !isTranslationPlaying && data && currentAyahIndex !== -1) {
-        const ayah = data.arabicAyahs[currentAyahIndex];
-        if (ayah.pashtoAudio) {
-            setIsTranslationPlaying(true);
-            setActiveWordIndex(-1);
-            activeWordIndexRef.current = -1;
-            if (audioRef.current) {
-                audioRef.current.src = ayah.pashtoAudio;
-                audioRef.current.play().catch(err => {
-                    console.error("Pashto Audio Error:", err);
-                    setIsTranslationPlaying(false);
-                    handleAyahEnd(); // Skip to next if failed
-                });
-            }
-            return;
-        } else {
-            // Fallback to TTS if no audio URL
-            const pashtoText = data.pashtoAyahs[currentAyahIndex].text;
-            speakPashto(pashtoText);
-            return;
+    if (isAutoScrolling) {
+      setTimeout(() => {
+        const ayah = data.arabicAyahs[index];
+        if (ayah) {
+          const el = document.getElementById(`ayah-arabic-${ayah.numberInSurah}`) || document.getElementById(`ayah-${ayah.numberInSurah}`);
+          if (el) scrollElementToCenter(el);
         }
+      }, 50);
+    }
+  }, [visibleCount, data, isAutoScrolling, scrollElementToCenter]);
+
+  const handleAyahEnd = useCallback(() => {
+    if (!data || currentAyahIndex === -1) return;
+
+    // In 'both' mode: Arabic finished -> Now play Urdu translation ONCE
+    if (settings.audioMode === 'both' && !isTranslationPlaying) {
+      setIsTranslationPlaying(true);
+      setActiveWordIndex(-1);
+      activeWordIndexRef.current = -1;
+      setActiveUrduWordIndex(-1);
+      activeUrduWordIndexRef.current = -1;
+
+      // Ensure the Urdu translation below automatically moves to the middle of the screen
+      if (isAutoScrolling) {
+        setTimeout(() => {
+          const currentAyah = data.arabicAyahs[currentAyahIndex];
+          if (currentAyah) {
+            const el = document.getElementById(`ayah-urdu-${currentAyah.numberInSurah}`);
+            if (el) scrollElementToCenter(el);
+          }
+        }, 50);
+      }
+      return;
     }
 
-    setIsTranslationPlaying(false);
-    if (data && currentAyahIndex < data.arabicAyahs.length - 1) {
-        setCurrentAyahIndex(prev => prev + 1);
-        setActiveWordIndex(-1);
-        activeWordIndexRef.current = -1;
-    } else {
-        setIsPlaying(false);
-        setCurrentAyahIndex(-1);
-        setActiveWordIndex(-1);
-        activeWordIndexRef.current = -1;
+    // In 'ar_ps' mode: Arabic finished -> Now play Pashto translation ONCE
+    if (settings.audioMode === 'ar_ps' && !isPashtoPlaying) {
+      setIsPashtoPlaying(true);
+      setActiveWordIndex(-1);
+      activeWordIndexRef.current = -1;
+      setActivePashtoWordIndex(-1);
+      activePashtoWordIndexRef.current = -1;
+
+      if (isAutoScrolling) {
+        setTimeout(() => {
+          const currentAyah = data.arabicAyahs[currentAyahIndex];
+          if (currentAyah) {
+            const el = document.getElementById(`ayah-pashto-${currentAyah.numberInSurah}`);
+            if (el) scrollElementToCenter(el);
+          }
+        }, 50);
+      }
+      return;
     }
-  };
+
+    // Finished translation OR in arabic-only mode -> Advance to next Ayah!
+    setIsTranslationPlaying(false);
+    setIsPashtoPlaying(false);
+    setActiveWordIndex(-1);
+    activeWordIndexRef.current = -1;
+    setActiveUrduWordIndex(-1);
+    activeUrduWordIndexRef.current = -1;
+    setActivePashtoWordIndex(-1);
+    activePashtoWordIndexRef.current = -1;
+
+    if (currentAyahIndex < data.arabicAyahs.length - 1) {
+      const nextIndex = currentAyahIndex + 1;
+      if (nextIndex >= visibleCount) {
+        setVisibleCount(prev => Math.min(prev + 20, data.arabicAyahs.length));
+      }
+      setCurrentAyahIndex(nextIndex);
+
+      // Automatically move next verse Arabic text up into the middle of the screen
+      if (isAutoScrolling) {
+        setTimeout(() => {
+          const nextAyah = data.arabicAyahs[nextIndex];
+          if (nextAyah) {
+            const el = document.getElementById(`ayah-arabic-${nextAyah.numberInSurah}`) || document.getElementById(`ayah-${nextAyah.numberInSurah}`);
+            if (el) scrollElementToCenter(el);
+          }
+        }, 50);
+      }
+    } else {
+      setIsPlaying(false);
+      setCurrentAyahIndex(-1);
+    }
+  }, [data, currentAyahIndex, settings.audioMode, isTranslationPlaying, isPashtoPlaying, visibleCount, isAutoScrolling, scrollElementToCenter]);
+
+  // Continuous position watchdog: ensures active recitation or translation stays in the middle
+  // and as soon as it moves towards the bottom of the page, automatically moves it up to the middle of the screen
+  useEffect(() => {
+    if (!isPlaying || currentAyahIndex === -1 || !data || !isAutoScrolling) return;
+
+    const interval = setInterval(() => {
+      const ayah = data.arabicAyahs[currentAyahIndex];
+      if (!ayah) return;
+
+      const headerBottom = headerRef.current ? headerRef.current.getBoundingClientRect().bottom : 155;
+      const targetCenterY = headerBottom + (window.innerHeight - headerBottom) / 2;
+
+      let targetEl: HTMLElement | null = null;
+      if (isTranslationPlaying) {
+        targetEl = (activeUrduWordIndex >= 0 ? document.getElementById(`urdu-word-${currentAyahIndex}-${activeUrduWordIndex}`) : null)
+          || document.getElementById(`ayah-urdu-${ayah.numberInSurah}`);
+      } else if (isPashtoPlaying) {
+        targetEl = (activePashtoWordIndex >= 0 ? document.getElementById(`pashto-word-${currentAyahIndex}-${activePashtoWordIndex}`) : null)
+          || document.getElementById(`ayah-pashto-${ayah.numberInSurah}`);
+      } else {
+        targetEl = (activeWordIndex >= 0 ? document.getElementById(`word-${currentAyahIndex}-${activeWordIndex}`) : null)
+          || document.getElementById(`ayah-arabic-${ayah.numberInSurah}`)
+          || document.getElementById(`ayah-${ayah.numberInSurah}`);
+      }
+
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        // If bottom has moved past middle by 45px or is near the bottom of viewport
+        if (rect.bottom > targetCenterY + 45 || rect.bottom > window.innerHeight - 110 || rect.top < headerBottom + 10) {
+          scrollElementToCenter(targetEl);
+        }
+      }
+    }, 350);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, currentAyahIndex, isTranslationPlaying, isPashtoPlaying, activeWordIndex, activeUrduWordIndex, activePashtoWordIndex, data, isAutoScrolling, scrollElementToCenter]);
 
   useEffect(() => {
     if (!audioRef.current) return;
     
     const audio = audioRef.current;
     const handleTimeUpdate = () => {
-        if (!audio.duration || audio.duration === Infinity || currentAyahIndex === -1 || !data || isTranslationPlaying) return;
-        const ayah = data.arabicAyahs[currentAyahIndex];
+      if (!audio.duration || audio.duration === Infinity || currentAyahIndex === -1 || !data) return;
+
+      if (isPashtoPlaying) {
+        const ayah = data.pashtoAyahs[currentAyahIndex];
+        if (!ayah) return;
+        const words = ayah.text.trim().split(/[ \t\r\n]+/);
+        if (words.length === 0) return;
+        const durationAdjustment = Math.max(0.5, audio.duration - 0.4);
+        const currentTimeRatio = Math.min(1, Math.max(0, audio.currentTime / durationAdjustment));
+        const index = Math.min(words.length - 1, Math.floor(currentTimeRatio * words.length));
         
-        // Synchronized word splitting with the render logic
-        const words = ayah.text.trim().split(/\s+/);
+        if (index !== activePashtoWordIndexRef.current) {
+          activePashtoWordIndexRef.current = index;
+          setActivePashtoWordIndex(index);
+          if (isAutoScrolling) {
+            const wordElement = document.getElementById(`pashto-word-${currentAyahIndex}-${index}`);
+            const pashtoContainer = document.getElementById(`ayah-pashto-${data.arabicAyahs[currentAyahIndex]?.numberInSurah}`);
+            const targetEl = wordElement || pashtoContainer;
+            if (targetEl) {
+              const rect = targetEl.getBoundingClientRect();
+              const headerBottom = headerRef.current ? headerRef.current.getBoundingClientRect().bottom : 155;
+              const targetCenterY = headerBottom + (window.innerHeight - headerBottom) / 2;
+              if (rect.bottom > targetCenterY + 35 || rect.bottom > window.innerHeight - 120 || rect.top < headerBottom + 10) {
+                scrollElementToCenter(targetEl);
+              }
+            }
+          }
+        }
+        return;
+      }
+
+      if (isTranslationPlaying) {
+        const ayah = data.tafseerAyahs[currentAyahIndex];
+        if (!ayah) return;
+        const words = ayah.text.trim().split(/[ \t\r\n]+/);
+        if (words.length === 0) return;
+        const durationAdjustment = Math.max(0.5, audio.duration - 0.5);
+        const currentTimeRatio = Math.min(1, Math.max(0, audio.currentTime / durationAdjustment));
+        const index = Math.min(words.length - 1, Math.floor(currentTimeRatio * words.length));
         
-        // Calculate total characters to weight word durations
+        if (index !== activeUrduWordIndexRef.current) {
+          activeUrduWordIndexRef.current = index;
+          setActiveUrduWordIndex(index);
+          if (isAutoScrolling) {
+            const wordElement = document.getElementById(`urdu-word-${currentAyahIndex}-${index}`);
+            const urduContainer = document.getElementById(`ayah-urdu-${data.arabicAyahs[currentAyahIndex]?.numberInSurah}`);
+            const targetEl = wordElement || urduContainer;
+            if (targetEl) {
+              const rect = targetEl.getBoundingClientRect();
+              const headerBottom = headerRef.current ? headerRef.current.getBoundingClientRect().bottom : 155;
+              const targetCenterY = headerBottom + (window.innerHeight - headerBottom) / 2;
+              // If Urdu word or translation moves towards the bottom of the page, automatically move it up to the middle
+              if (rect.bottom > targetCenterY + 35 || rect.bottom > window.innerHeight - 120 || rect.top < headerBottom + 10) {
+                scrollElementToCenter(targetEl);
+              }
+            }
+          }
+        }
+        return;
+      }
+
+      // Arabic Word Synchronization (High-Precision Millisecond Alignment)
+      const ayah = data.arabicAyahs[currentAyahIndex];
+      if (!ayah) return;
+      const words = ayah.text.trim().split(/[ \t\r\n]+/);
+      if (words.length === 0) return;
+
+      let index = -1;
+
+      // 1. Precise Word-Level Timestamps from Quran.com / Alafasy
+      if (ayah.segments && ayah.segments.length > 0) {
+        const currentMs = audio.currentTime * 1000;
+        
+        // Find segment covering currentTime
+        const seg = ayah.segments.find(([pos, sMs, eMs]) => currentMs >= sMs && currentMs < eMs);
+        if (seg) {
+          const segWordPos = seg[0] - 1; // 0-indexed position
+          if (ayah.segments.length === words.length) {
+            index = segWordPos;
+          } else {
+            // Scaled mapping if words count differs slightly
+            index = Math.min(words.length - 1, Math.floor((segWordPos / ayah.segments.length) * words.length));
+          }
+        } else {
+          // If in between segments, find the latest segment that started
+          for (let s = ayah.segments.length - 1; s >= 0; s--) {
+            if (currentMs >= ayah.segments[s][1]) {
+              const segWordPos = ayah.segments[s][0] - 1;
+              if (ayah.segments.length === words.length) {
+                index = segWordPos;
+              } else {
+                index = Math.min(words.length - 1, Math.floor((segWordPos / ayah.segments.length) * words.length));
+              }
+              break;
+            }
+          }
+          if (index === -1) index = 0;
+        }
+      } else {
+        // 2. Calibrated mathematical synchronization model
+        // Accounts for initial lead-in (0.12s) and tail silence / extended Madd (1.2s - 1.4s)
+        const tailSilence = Math.min(1.4, Math.max(0.6, audio.duration * 0.22));
+        const leadIn = 0.12;
+        const activeDuration = Math.max(0.5, audio.duration - tailSilence - leadIn);
+        const effectiveTime = Math.max(0, audio.currentTime - leadIn);
+        const progress = Math.min(1, effectiveTime / activeDuration);
+
         const totalChars = words.reduce((sum, w) => sum + w.length, 0);
-        let elapsedChars = 0;
-        let index = 0;
-        
-        // Slightly adjust ratio to account for silence at the end of audio files
-        const durationAdjustment = Math.max(0, audio.duration - 0.4);
-        const currentTimeRatio = Math.min(1, audio.currentTime / (durationAdjustment || 1));
-        const targetCharCount = currentTimeRatio * totalChars;
-        
+        const targetChars = progress * totalChars;
+        let cumulative = 0;
+        index = 0;
         for (let i = 0; i < words.length; i++) {
-            elapsedChars += words[i].length;
-            if (elapsedChars >= targetCharCount) {
-                index = i;
-                break;
-            }
+          cumulative += words[i].length;
+          if (cumulative >= targetChars) {
+            index = i;
+            break;
+          }
         }
-        
-        if (index !== activeWordIndexRef.current && index < words.length) {
-            activeWordIndexRef.current = index;
-            setActiveWordIndex(index);
-            
-            // Auto-scroll to the active word/ayah if enabled
-            if (isAutoScrolling) {
-                const wordElement = document.getElementById(`word-${currentAyahIndex}-${index}`);
-                const ayahElement = document.getElementById(`ayah-${ayah.numberInSurah}`);
-                
-                if (wordElement) {
-                    wordElement.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-                } else if (ayahElement && index === 0) {
-                    ayahElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
+      }
+
+      index = Math.max(0, Math.min(words.length - 1, index));
+
+      if (index !== activeWordIndexRef.current) {
+        activeWordIndexRef.current = index;
+        setActiveWordIndex(index);
+
+        if (isAutoScrolling) {
+          const wordElement = document.getElementById(`word-${currentAyahIndex}-${index}`);
+          const arabicContainer = document.getElementById(`ayah-arabic-${ayah.numberInSurah}`) || document.getElementById(`ayah-${ayah.numberInSurah}`);
+          const targetEl = wordElement || arabicContainer;
+          if (targetEl) {
+            const rect = targetEl.getBoundingClientRect();
+            const headerBottom = headerRef.current ? headerRef.current.getBoundingClientRect().bottom : 155;
+            const targetCenterY = headerBottom + (window.innerHeight - headerBottom) / 2;
+            // As soon as the arabic text moves towards the bottom of the page, automatically move up to middle
+            if (rect.bottom > targetCenterY + 40 || rect.bottom > window.innerHeight - 130 || rect.top < headerBottom + 10) {
+              scrollElementToCenter(targetEl);
             }
+          }
         }
+      }
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
     return () => audio.removeEventListener('timeupdate', handleTimeUpdate);
-  }, [currentAyahIndex, data, isAutoScrolling, isTranslationPlaying]);
+  }, [currentAyahIndex, data, isAutoScrolling, isTranslationPlaying, isPashtoPlaying, scrollElementToCenter]);
 
   const getThemeClasses = () => {
     switch(settings.theme) {
@@ -528,24 +742,70 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
   };
 
   const getFontClasses = () => {
-    switch(settings.fontSize) {
-      case 'sm': return 'text-4xl md:text-5xl';
-      case 'lg': return 'text-6xl md:text-7xl';
-      case 'xl': return 'text-7xl md:text-8xl';
-      case '2xl': return 'text-8xl md:text-9xl';
-      default: return 'text-5xl md:text-6xl';
-    }
+    return '';
   };
 
   const getTafseerStyle = () => {
-    const base = { fontWeight: '700' };
-    switch(settings.tafseerFontSize) {
-      case 'sm': return { ...base, fontSize: '1.2rem', lineHeight: '1.8rem' }; 
-      case 'base': return { ...base, fontSize: '1.4rem', lineHeight: '2.1rem' };
-      case 'lg': return { ...base, fontSize: '1.6rem', lineHeight: '2.4rem' }; 
-      case 'xl': return { ...base, fontSize: '1.8rem', lineHeight: '2.7rem' };
-      case '2xl': return { ...base, fontSize: '2.2rem', lineHeight: '3.3rem' };
-      default: return { ...base, fontSize: '1.6rem', lineHeight: '2.4rem' };
+    return { 
+      fontWeight: '700',
+      fontSize: `${settings.tafseerFontSize}px`,
+      lineHeight: `${settings.tafseerFontSize * 1.5}px`
+    };
+  };
+
+  const [copied, setCopied] = useState(false);
+  const [copiedAyahIndex, setCopiedAyahIndex] = useState<number | null>(null);
+
+  const handleShare = async () => {
+    const origin = window.location.origin;
+    let shareUrl = origin;
+    if (origin.includes('ais-dev-')) {
+      shareUrl = origin.replace('ais-dev-', 'ais-pre-');
+    }
+    shareUrl += window.location.hash;
+
+    const shareData = {
+      title: `Quran Kareem - ${data?.name || 'Surah'}`,
+      text: `Read and listen to ${data?.name} (${data?.englishName}) with Urdu audio translation.`,
+      url: shareUrl,
+    };
+
+    if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+      try {
+        await navigator.share(shareData);
+      } catch (err) {
+        console.error('Share failed:', err);
+      }
+    } else {
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    }
+  };
+
+  const handleShareAyah = (e: React.MouseEvent, sNum: number, aNum: number, idx: number) => {
+    e.stopPropagation();
+    const origin = window.location.origin;
+    let shareUrl = origin;
+    if (origin.includes('ais-dev-')) {
+      shareUrl = origin.replace('ais-dev-', 'ais-pre-');
+    }
+    const fullUrl = `${shareUrl}#surah/${sNum}/${aNum}`;
+    
+    const shareData = {
+      title: `Quran Kareem - Ayah Link`,
+      text: `Read Surah ${data?.name || ''} Ayah ${aNum} with Urdu audio translation.`,
+      url: fullUrl,
+    };
+
+    if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+       navigator.share(shareData).catch(err => console.error(err));
+    } else {
+      navigator.clipboard.writeText(fullUrl).then(() => {
+        setCopiedAyahIndex(idx);
+        setTimeout(() => setCopiedAyahIndex(null), 2000);
+      });
     }
   };
 
@@ -593,49 +853,41 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
         onError={() => {
             const audio = audioRef.current;
             console.error("Audio playback error occurred");
-            
             setIsAudioLoading(false);
-            setConsecutiveAudioErrors(prev => prev + 1);
             
-            if (consecutiveAudioErrors > 5) {
-                setError("Multiple audio playback errors occurred. Please check your internet connection or try a different Surah.");
-                setIsPlaying(false);
-                return;
-            }
-
-            // Fallback Logic: Try everyayah.com if cdn.islamic.network fails
             if (audio && data && currentAyahIndex !== -1) {
+                // If translation audio failed, fall back to TTS or advance
+                if (isTranslationPlaying) {
+                    console.warn("Translation audio failed, falling back to TTS");
+                    const urduText = data.tafseerAyahs[currentAyahIndex]?.text;
+                    if (urduText) speakUrdu(urduText);
+                    else handleAyahEnd();
+                    return;
+                }
+
+                // If pashto audio failed, skip to next
+                if (isPashtoPlaying) {
+                    handleAyahEnd();
+                    return;
+                }
+
                 const ayah = data.arabicAyahs[currentAyahIndex];
+                if (!ayah) {
+                    handleAyahEnd();
+                    return;
+                }
                 const sNum = ayah.surah?.number || surahNumber || 1;
                 const aNum = ayah.numberInSurah;
                 const surahStr = sNum.toString().padStart(3, '0');
                 const ayahStr = aNum.toString().padStart(3, '0');
-                const cb = `cb=${Date.now()}`;
                 
-                // If we haven't tried the fallback yet for this specific ayah
-                if (!audio.src.includes('everyayah.com') && !audio.src.includes('quranicaudio.com')) {
-                    const fallbackUrl = `https://everyayah.com/data/Alafasy_128kbps/${surahStr}${ayahStr}.mp3?${cb}`;
-                    
-                    console.log(`Attempting fallback 1: ${fallbackUrl}`);
+                // Fallback to QuranicAudio.com if not tried yet
+                if (!audio.src.includes('quranicaudio.com')) {
+                    const fallbackUrl = `https://download.quranicaudio.com/quran/mishary_rashid_alafasy/${surahStr}${ayahStr}.mp3`;
                     audio.src = fallbackUrl;
-                    audio.load();
-                    audio.play().catch(err => {
-                        console.error("Fallback 1 failed, trying fallback 2", err);
-                        // Try fallback 2: quranicaudio.com
-                        const fallbackUrl2 = `https://download.quranicaudio.com/quran/mishary_rashid_alafasy/${surahStr}${ayahStr}.mp3?${cb}`;
-                        audio.src = fallbackUrl2;
-                        audio.load();
-                        audio.play().catch(() => handleAyahEnd());
-                    });
-                } else if (audio.src.includes('everyayah.com')) {
-                    // Try fallback 2 if fallback 1 was already tried
-                    const fallbackUrl2 = `https://download.quranicaudio.com/quran/mishary_rashid_alafasy/${surahStr}${ayahStr}.mp3?${cb}`;
-                    console.log(`Attempting fallback 2: ${fallbackUrl2}`);
-                    audio.src = fallbackUrl2;
                     audio.load();
                     audio.play().catch(() => handleAyahEnd());
                 } else {
-                    // All fallbacks failed, skip
                     handleAyahEnd();
                 }
             } else {
@@ -668,17 +920,69 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                         </div>
                     </div>
                     <div>
-                        <label className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 mb-1 block text-right">تحریر کا سائز (Font Size)</label>
-                        <div className="grid grid-cols-5 gap-1.5">
-                            {(['sm', 'base', 'lg', 'xl', '2xl'] as FontSize[]).map(size => (
-                                <button 
-                                    key={size} 
-                                    onClick={() => onUpdateSettings({...settings, fontSize: size})}
-                                    className={`py-1.5 rounded-lg font-black uppercase text-[9px] border-2 transition-all ${settings.fontSize === size ? 'border-black bg-black text-white shadow-sm' : 'border-gray-100 text-gray-400 bg-gray-50'}`}
-                                >
-                                    {size}
-                                </button>
-                            ))}
+                        <div className="flex justify-between items-center mb-1">
+                            <span className="px-2 py-0.5 text-[10px] font-black bg-emerald-500/10 text-emerald-600 rounded-md">
+                                {settings.fontSize}px
+                            </span>
+                            <label className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 block text-right">تحریر کا سائز (Arabic Font Size)</label>
+                        </div>
+                        <div className="flex items-center gap-3 py-1 bg-gray-50 dark:bg-gray-850 px-3 rounded-xl border border-black/[0.03]">
+                            <button 
+                                onClick={() => onUpdateSettings({...settings, fontSize: Math.max(28, settings.fontSize - 2)})}
+                                className="p-2 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-lg transition-colors"
+                                title="Decrease"
+                            >
+                                <Minus size={14} />
+                            </button>
+                            <input 
+                                type="range" 
+                                min={28} 
+                                max={120} 
+                                step={2}
+                                value={settings.fontSize} 
+                                onChange={(e) => onUpdateSettings({...settings, fontSize: parseInt(e.target.value, 10)})}
+                                className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-600 focus:outline-none"
+                            />
+                            <button 
+                                onClick={() => onUpdateSettings({...settings, fontSize: Math.min(120, settings.fontSize + 2)})}
+                                className="p-2 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-lg transition-colors"
+                                title="Increase"
+                            >
+                                <Plus size={14} />
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <div className="flex justify-between items-center mb-1">
+                            <span className="px-2 py-0.5 text-[10px] font-black bg-emerald-500/10 text-emerald-600 rounded-md">
+                                {settings.tafseerFontSize}px
+                            </span>
+                            <label className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 block text-right">اردو ترجمہ کا سائز (Urdu Font Size)</label>
+                        </div>
+                        <div className="flex items-center gap-3 py-1 bg-gray-50 dark:bg-gray-850 px-3 rounded-xl border border-black/[0.03]">
+                            <button 
+                                onClick={() => onUpdateSettings({...settings, tafseerFontSize: Math.max(14, settings.tafseerFontSize - 1)})}
+                                className="p-2 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-lg transition-colors"
+                                title="Decrease"
+                            >
+                                <Minus size={14} />
+                            </button>
+                            <input 
+                                type="range" 
+                                min={14} 
+                                max={64} 
+                                step={1}
+                                value={settings.tafseerFontSize} 
+                                onChange={(e) => onUpdateSettings({...settings, tafseerFontSize: parseInt(e.target.value, 10)})}
+                                className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-600 focus:outline-none"
+                            />
+                            <button 
+                                onClick={() => onUpdateSettings({...settings, tafseerFontSize: Math.min(64, settings.tafseerFontSize + 1)})}
+                                className="p-2 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-lg transition-colors"
+                                title="Increase"
+                            >
+                                <Plus size={14} />
+                            </button>
                         </div>
                     </div>
                     <div>
@@ -693,22 +997,22 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                             </button>
                             <button 
                                 onClick={() => onUpdateSettings({...settings, showPashto: !settings.showPashto})}
-                                className={`py-2 rounded-xl font-bold border-2 transition-all shadow-sm flex items-center justify-center gap-1.5 text-[10px] ${settings.showPashto ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-gray-100 text-gray-400 bg-gray-50'}`}
+                                className={`py-2 rounded-xl font-bold border-2 transition-all shadow-sm flex items-center justify-center gap-1.5 text-[10px] ${settings.showPashto ? 'border-black bg-black text-white' : 'border-gray-100 text-gray-400 bg-gray-50'}`}
                             >
                                 {settings.showPashto ? <BookmarkCheck size={14} /> : <X size={14} />}
-                                پشتو (Pashto)
+                                پښتو (Pashto)
                             </button>
                         </div>
                     </div>
                     <div>
                         <label className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 mb-1 block text-right">آڈیو موڈ (Audio Mode)</label>
-                        <div className="grid grid-cols-5 gap-1.5">
+                        <div className="grid grid-cols-3 gap-1.5">
                             {[
                                 { id: 'arabic', label: 'Arabic' },
                                 { id: 'urdu', label: 'Urdu' },
                                 { id: 'pashto', label: 'Pashto' },
                                 { id: 'both', label: 'Ar + Ur' },
-                                { id: 'both-pashto', label: 'Ar + Ps' }
+                                { id: 'ar_ps', label: 'Ar + Ps' },
                             ].map(mode => (
                                 <button 
                                     key={mode.id} 
@@ -777,7 +1081,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
          <div className="flex-1 px-6 hidden lg:block">
             <div className="flex justify-between items-center mb-1.5">
                 <span className="text-[11px] font-black uppercase tracking-widest text-emerald-600">
-                    {currentAyahIndex === -1 ? 'Select an Ayah' : (isBismillahPlaying ? 'Reciting Bismillah' : `Ayah ${currentAyahIndex + 1}`)}
+                    {currentAyahIndex === -1 ? 'Select an Ayah' : isTranslationPlaying ? `Ayah ${currentAyahIndex + 1} (Urdu Translation)` : isPashtoPlaying ? `Ayah ${currentAyahIndex + 1} (Pashto Translation)` : `Ayah ${currentAyahIndex + 1} (Arabic Recitation)`}
                     {isAudioLoading && ' (Loading...)'}
                 </span>
                 <span className="text-[11px] font-black uppercase tracking-widest opacity-40">
@@ -845,10 +1149,15 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
          </div>
       </div>
 
-      <header ref={headerRef} className={`sticky top-[75px] z-50 px-6 py-5 flex items-center justify-center border-b transition-all duration-300 shadow-lg backdrop-blur-md ${getThemeClasses()}`}>
-        <button onClick={onBack} className="p-3 text-black bg-gray-100 hover:bg-gray-200 rounded-2xl active-press transition-all"><ArrowLeft size={24} /></button>
-        <div className="text-center">
-            <h1 className="font-arabic text-3xl text-black leading-none mb-1 font-bold">
+      <header ref={headerRef} className={`sticky top-[75px] z-50 px-6 py-5 flex items-center justify-between border-b transition-all duration-300 shadow-lg backdrop-blur-md ${getThemeClasses()}`}>
+        <div className="flex items-center gap-4">
+            <button onClick={onBack} className="p-3 text-black bg-gray-100 hover:bg-gray-200 rounded-2xl active-press transition-all"><ArrowLeft size={24} /></button>
+            <button onClick={handleShare} className="p-3 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-2xl active-press transition-all">
+                {copied ? <Check size={24} /> : <Share2 size={24} />}
+            </button>
+        </div>
+        <div className="text-center flex-1">
+            <h1 className="font-arabic font-alqalam text-3xl text-black leading-none mb-1 font-bold" style={{ fontFamily: "'Al Qalam Quran Majeed', 'AlQalamQuranMajeed', serif" }}>
               {juzNumber ? `پارہ ${juzNumber}` : (data as CombinedSurahData)?.surahInfo?.name}
             </h1>
             <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.25em]">
@@ -856,6 +1165,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
             </p>
         </div>
         <div className="flex items-center gap-2">
+            <PWAInstallButton variant="header" className="!bg-emerald-50 !text-emerald-700 !border-emerald-200 hover:!bg-emerald-100 !py-2 !px-3 hidden sm:flex" />
             <button 
                 onClick={() => isOnline ? setShowChat(true) : alert("AI Chat is only available online.")} 
                 className={`p-3 rounded-2xl active-press transition-all ${isOnline ? 'text-black bg-gray-100 hover:bg-gray-200' : 'text-gray-300 bg-gray-50 cursor-not-allowed'}`}
@@ -876,7 +1186,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                     <div className="taj-surah-header w-full max-w-4xl py-6 px-4 border-4 border-black rounded-xl text-center relative overflow-hidden bg-white shadow-inner">
                         <div className="absolute top-0 left-0 w-full h-1 bg-black opacity-10"></div>
                         <div className="absolute bottom-0 left-0 w-full h-1 bg-black opacity-10"></div>
-                        <h2 className="font-indopak text-4xl md:text-6xl text-black mb-2" dir="rtl">
+                        <h2 className="font-indopak font-alqalam text-4xl md:text-6xl text-black mb-2" style={{ fontFamily: "'Al Qalam Quran Majeed', 'AlQalamQuranMajeed', serif" }} dir="rtl">
                             سُورَةُ {(data as CombinedSurahData)?.surahInfo?.name}
                         </h2>
                         <div className="flex justify-center gap-8 text-[9px] font-black text-gray-400 uppercase tracking-[0.2em]">
@@ -890,7 +1200,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
             {!juzNumber && surahNumber !== 1 && surahNumber !== 9 && (
                 <div className="flex flex-col items-center mb-8 px-2">
                     <div className={`text-center py-6 px-8 border-4 border-black rounded-2xl w-full max-w-xl shadow-md bg-white`}>
-                        <p className="font-indopak text-4xl md:text-6xl text-black" dir="rtl">
+                        <p className="font-indopak font-alqalam text-4xl md:text-6xl text-black" style={{ fontFamily: "'Al Qalam Quran Majeed', 'AlQalamQuranMajeed', serif" }} dir="rtl">
                             {BISMILLAH_TEXT}
                         </p>
                         <p className="text-[10px] font-bold text-gray-400 mt-2 uppercase tracking-widest">In the name of Allah, the Most Gracious, the Most Merciful</p>
@@ -901,6 +1211,7 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
         <div className="space-y-0">
             {data?.arabicAyahs.slice(0, visibleCount).map((ayah, idx) => {
                 const tafseerAyah = data.tafseerAyahs?.[idx];
+                const pashtoAyah = data.pashtoAyahs?.[idx];
                 const isCurrentAyah = currentAyahIndex === idx;
                 
                 // For Juz, we need to get surah info from the ayah itself if available
@@ -908,36 +1219,56 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                 const sName = ayah.surah?.englishName;
 
                 const bookmarked = bookmarks.some(b => b.surahNumber === sNum && b.ayahNumber === ayah.numberInSurah);
-                const words = ayah.text.trim().split(/\s+/);
+                const words = ayah.text.trim().split(/[ \t\r\n]+/);
                 
                 return (
                     <div 
                         key={ayah.number} 
                         id={`ayah-${ayah.numberInSurah}`}
-                        className={`group relative transition-all duration-300 border-b border-black/5 last:border-0 ${
-                            isCurrentAyah ? 'bg-emerald-50/20' : ''
+                        onClick={() => playAyah(idx)}
+                        className={`group relative transition-all duration-500 border-b border-black/5 last:border-0 cursor-pointer ${
+                            isCurrentAyah && isPlaying 
+                                ? 'bg-emerald-50/40 dark:bg-emerald-950/30 rounded-2xl shadow-md border-emerald-500/30 ring-1 ring-emerald-500/20 my-2' 
+                                : (isCurrentAyah ? 'bg-emerald-50/20' : 'hover:bg-black/5')
                         }`}
                         style={{ overflow: 'visible' }}
                     >
-                        {/* Beautiful Quranic Text Presentation - Continuous Flow */}
+                        {/* Active Arabic Recitation Status Indicator */}
+                        {isCurrentAyah && isPlaying && !isTranslationPlaying && !isPashtoPlaying && (
+                            <div className="flex items-center justify-between px-4 pt-3 pb-1 border-b border-emerald-500/20">
+                                <div className="flex items-center gap-2 px-3 py-1 bg-emerald-600 text-white rounded-full text-[10px] font-black tracking-wider shadow-sm animate-pulse">
+                                    <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
+                                    <span>تلاوتِ قرآن جاری ہے • Recitation in Progress</span>
+                                </div>
+                                <span className="text-xs font-black text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-md">آیت {ayah.numberInSurah}</span>
+                            </div>
+                        )}
+
+                        {/* Beautiful Quranic Text Presentation in Al Qalam Quran Majeed font */}
                         <div 
+                            id={`ayah-arabic-${ayah.numberInSurah}`}
                             className={`flex flex-wrap gap-x-0 gap-y-0 p-2 md:p-4 transition-all duration-500 ${
                                 isCurrentAyah ? 'bg-emerald-500/5' : ''
                             }`} 
                             dir="rtl"
                         >
                             {words.map((word, wIdx) => {
-                                const isWordActive = isCurrentAyah && isPlaying && activeWordIndex === wIdx;
+                                const isWordActive = isCurrentAyah && isPlaying && !isTranslationPlaying && activeWordIndex === wIdx;
                                 return (
                                     <span 
                                         key={wIdx} 
                                         id={`word-${idx}-${wIdx}`}
-                                        className={`font-indopak transition-all duration-300 px-1 inline-flex items-center justify-center ${
+                                        className={`font-indopak font-alqalam transition-all duration-300 px-1 inline-flex items-center justify-center ${
                                             isWordActive 
-                                                ? 'bg-black !text-[#4ade80] shadow-xl z-10 font-bold scale-110 rounded-md' 
+                                                ? 'bg-black !text-[#4ade80] shadow-xl z-10 font-bold scale-110 rounded-md ring-2 ring-emerald-400' 
                                                 : (settings.theme === 'dark' ? 'text-white' : 'text-black')
-                                        } ${getFontClasses()}`}
-                                        style={{ minWidth: '0.5em' }}
+                                        }`}
+                                        style={{ 
+                                            fontFamily: "'Al Qalam Quran Majeed', 'AlQalamQuranMajeed', serif",
+                                            minWidth: '0.5em', 
+                                            fontSize: `${settings.fontSize}px`, 
+                                            lineHeight: `${settings.fontSize * 1.55}px` 
+                                        }}
                                     >
                                         {word}
                                     </span>
@@ -945,46 +1276,174 @@ const Reader: React.FC<ReaderProps> = ({ surahNumber, juzNumber, initialAyah, on
                             })}
                             
                             {/* Ayah Number Symbol - Inline with text */}
-                            <div className="inline-flex items-center justify-center px-2">
+                            <div className="inline-flex items-center justify-center px-2 gap-2">
                                 <div className={`w-8 h-8 flex items-center justify-center rounded-full border border-black/20 font-black text-[10px] transition-all duration-500 ${
-                                    isCurrentAyah ? 'bg-black text-white' : 'bg-white text-black/40'
+                                    isCurrentAyah && !isTranslationPlaying ? 'bg-black text-white' : 'bg-white text-black/40'
                                 }`}>
                                     {ayah.numberInSurah}
                                 </div>
                                 <button 
-                                    onClick={() => toggleBookmark(ayah.numberInSurah, sNum, sName)} 
-                                    className={`mr-2 p-1 rounded-md transition-all ${bookmarked ? 'text-gold-600' : 'text-gray-300 hover:text-black'}`}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        playAyah(idx);
+                                    }}
+                                    className="p-1.5 bg-gray-100 text-gray-400 rounded-lg hover:bg-emerald-100 hover:text-emerald-600 transition-all active-press"
+                                    title="Play Arabic"
                                 >
-                                    <BookmarkIcon size={12} />
+                                    <Play size={12} fill="currentColor" />
+                                </button>
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleBookmark(ayah.numberInSurah, sNum, sName);
+                                    }} 
+                                    className={`p-1.5 rounded-lg transition-all ${bookmarked ? 'text-gold-600 bg-gold-50' : 'text-gray-300 bg-gray-50 hover:text-black'}`}
+                                    title="Bookmark Ayah"
+                                >
+                                    <BookmarkIcon size={12} fill={bookmarked ? "currentColor" : "none"} />
+                                </button>
+                                <button 
+                                    onClick={(e) => handleShareAyah(e, sNum || 1, ayah.numberInSurah, idx)} 
+                                    className={`p-1.5 rounded-lg transition-all ${copiedAyahIndex === idx ? 'text-emerald-700 bg-emerald-50' : 'text-gray-300 bg-gray-50 hover:text-black'}`}
+                                    title="Share Ayah Link"
+                                >
+                                    {copiedAyahIndex === idx ? <Check size={12} className="stroke-[3px]" /> : <Share2 size={12} />}
                                 </button>
                             </div>
                         </div>
 
-                        {/* Compact Translations */}
+                        {/* Compact Translations: Below Arabic Text */}
                         <div className="px-4 pb-2 space-y-1">
                             {settings.showTafseer && tafseerAyah && (
-                                <div className="text-right border-r-4 border-black/5 pr-3" dir="rtl">
-                                    <p 
-                                        className={`font-urdu transition-colors duration-300 ${
+                                <div 
+                                    id={`ayah-urdu-${ayah.numberInSurah}`} 
+                                    className={`text-right transition-all duration-500 pr-3 ${
+                                        isCurrentAyah && isPlaying && isTranslationPlaying 
+                                            ? 'border-r-4 border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 p-3 rounded-xl shadow-sm ring-1 ring-emerald-500/20' 
+                                            : 'border-r-4 border-black/5'
+                                    }`} 
+                                    dir="rtl"
+                                >
+                                    <div 
+                                        className={`font-urdu transition-colors duration-300 flex flex-wrap gap-x-1 justify-start ${
                                             settings.theme === 'dark' ? 'text-gray-300' : 'text-gray-600'
                                         }`}
                                         style={getTafseerStyle()}
                                     >
-                                        {tafseerAyah.text}
-                                    </p>
+                                        <div className="w-full flex items-center justify-between mb-2">
+                                            {isCurrentAyah && isPlaying && isTranslationPlaying ? (
+                                                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-600 text-white rounded-full text-[10px] font-black tracking-wider shadow-sm animate-pulse">
+                                                    <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
+                                                    <span>اردو ترجمہ جاری ہے • Urdu Translation in Progress</span>
+                                                </div>
+                                            ) : (
+                                                <div></div>
+                                            )}
+                                            <button 
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setCurrentAyahIndex(idx);
+                                                    setIsTranslationPlaying(true);
+                                                    setIsPlaying(true);
+                                                    setActiveWordIndex(-1);
+                                                    activeWordIndexRef.current = -1;
+                                                    setActiveUrduWordIndex(-1);
+                                                    activeUrduWordIndexRef.current = -1;
+                                                    if (isAutoScrolling) {
+                                                      setTimeout(() => {
+                                                        const el = document.getElementById(`ayah-urdu-${ayah.numberInSurah}`);
+                                                        if (el) scrollElementToCenter(el);
+                                                      }, 50);
+                                                    }
+                                                }}
+                                                className="text-[9px] font-black uppercase tracking-widest bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full hover:bg-emerald-100 hover:text-emerald-700 transition-all shadow-xs"
+                                            >
+                                                Play Urdu
+                                            </button>
+                                        </div>
+                                        {tafseerAyah.text.trim().split(/[ \t\r\n]+/).map((word, wIdx) => {
+                                            const isUrduWordActive = isCurrentAyah && isPlaying && isTranslationPlaying && activeUrduWordIndex === wIdx;
+                                            return (
+                                                <span 
+                                                    key={wIdx} 
+                                                    id={`urdu-word-${idx}-${wIdx}`}
+                                                    className={`transition-all duration-300 ${
+                                                        isUrduWordActive 
+                                                            ? 'text-emerald-700 dark:text-emerald-400 font-black scale-110 bg-emerald-100 dark:bg-emerald-900/60 px-1 rounded-sm' 
+                                                            : ''
+                                                    }`}
+                                                >
+                                                    {word}
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                             )}
-
-                            {settings.showPashto && data.pashtoAyahs?.[idx] && (
-                                <div className="text-right border-r-4 border-emerald-500/10 pr-3" dir="rtl">
-                                    <p 
-                                        className={`font-urdu transition-colors duration-300 ${
+                            {settings.showPashto && pashtoAyah && (
+                                <div 
+                                    id={`ayah-pashto-${ayah.numberInSurah}`}
+                                    className={`text-right transition-all duration-500 pr-3 mt-2 ${
+                                        isCurrentAyah && isPlaying && isPashtoPlaying 
+                                            ? 'border-r-4 border-emerald-600 bg-emerald-50/70 dark:bg-emerald-950/40 p-3 rounded-xl shadow-sm ring-1 ring-emerald-500/20' 
+                                            : 'border-r-4 border-emerald-500/20'
+                                    }`} 
+                                    dir="rtl"
+                                >
+                                    <div 
+                                        className={`font-urdu transition-colors duration-300 flex flex-wrap gap-x-1 justify-start ${
                                             settings.theme === 'dark' ? 'text-gray-300' : 'text-gray-600'
                                         }`}
                                         style={getTafseerStyle()}
                                     >
-                                        {data.pashtoAyahs[idx].text}
-                                    </p>
+                                        <div className="w-full flex items-center justify-between mb-2">
+                                            {isCurrentAyah && isPlaying && isPashtoPlaying ? (
+                                                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-600 text-white rounded-full text-[10px] font-black tracking-wider shadow-sm animate-pulse">
+                                                    <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
+                                                    <span>پښتو ترجمہ جاری ہے • Pashto Translation in Progress</span>
+                                                </div>
+                                            ) : (
+                                                <div></div>
+                                            )}
+                                            <button 
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setCurrentAyahIndex(idx);
+                                                    setIsPashtoPlaying(true);
+                                                    setIsPlaying(true);
+                                                    setActiveWordIndex(-1);
+                                                    activeWordIndexRef.current = -1;
+                                                    setActivePashtoWordIndex(-1);
+                                                    activePashtoWordIndexRef.current = -1;
+                                                    if (isAutoScrolling) {
+                                                      setTimeout(() => {
+                                                        const el = document.getElementById(`ayah-pashto-${ayah.numberInSurah}`);
+                                                        if (el) scrollElementToCenter(el);
+                                                      }, 50);
+                                                    }
+                                                }}
+                                                className="text-[9px] font-black uppercase tracking-widest bg-gray-100 text-gray-500 px-2.5 py-1 rounded-full hover:bg-emerald-100 hover:text-emerald-700 transition-all shadow-xs"
+                                            >
+                                                Play Pashto
+                                            </button>
+                                        </div>
+                                        {pashtoAyah.text.trim().split(/[ \t\r\n]+/).map((word, wIdx) => {
+                                            const isPashtoWordActive = isCurrentAyah && isPlaying && isPashtoPlaying && activePashtoWordIndex === wIdx;
+                                            return (
+                                                <span 
+                                                    key={wIdx} 
+                                                    id={`pashto-word-${idx}-${wIdx}`}
+                                                    className={`transition-all duration-300 ${
+                                                        isPashtoWordActive 
+                                                            ? 'text-emerald-700 dark:text-emerald-400 font-black scale-110 bg-emerald-100 dark:bg-emerald-900/60 px-1 rounded-sm' 
+                                                            : ''
+                                                    }`}
+                                                >
+                                                    {word}
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                             )}
                         </div>
